@@ -7,6 +7,7 @@ live video and camera controls. Nothing here needs internet access.
 """
 import argparse
 import base64
+import collections
 import datetime
 import hashlib
 import ipaddress
@@ -26,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import imageio_ffmpeg
+import psutil
 
 try:
     from pytapo import Tapo
@@ -45,6 +47,28 @@ LOCK = threading.RLock()
 
 # ---------------------------------------------------------------- config
 
+SERVICE = "tapo-camera-viewer"
+SECRET_KEYS = ("password", "cloud_password")
+
+
+def _keychain():
+    """The OS keychain via `keyring`, or None if this machine doesn't have a usable one."""
+    try:
+        import keyring
+        from keyring.backends import fail
+        kr = keyring.get_keyring()
+        if isinstance(kr, fail.Keyring) or "null" in type(kr).__module__:
+            return None
+        kr.get_password(SERVICE, "password")  # make sure it actually answers
+        return kr
+    except Exception:
+        return None
+
+
+KEYCHAIN = _keychain()
+_stored = {}  # what the keychain currently holds, so we only write when something changed
+
+
 def load_config():
     try:
         with open(CONFIG_PATH) as f:
@@ -52,23 +76,48 @@ def load_config():
     except Exception:
         cfg = {}
     cfg.setdefault("username", "")
-    cfg.setdefault("password", "")
-    cfg.setdefault("cloud_password", "")
     cfg.setdefault("manual_ips", [])
     cfg.setdefault("known", {})  # ip -> {"name": .., "model": ..}
+    for k in SECRET_KEYS:
+        in_file = cfg.get(k) or ""
+        if KEYCHAIN:
+            _stored[k] = KEYCHAIN.get_password(SERVICE, k) or ""
+            cfg[k] = in_file or _stored[k]  # a password left in the file gets moved over on save
+        else:
+            cfg[k] = in_file
     return cfg
 
 
 def save_config():
+    data = dict(CONFIG)
+    if KEYCHAIN:
+        for k in SECRET_KEYS:
+            data.pop(k)
+            if CONFIG[k] != _stored.get(k, ""):
+                if CONFIG[k]:
+                    KEYCHAIN.set_password(SERVICE, k, CONFIG[k])
+                else:
+                    try:
+                        KEYCHAIN.delete_password(SERVICE, k)
+                    except Exception:
+                        pass
+                _stored[k] = CONFIG[k]
     os.makedirs(CONFIG_DIR, exist_ok=True)
     tmp = CONFIG_PATH + ".tmp"
     with open(tmp, "w") as f:
-        json.dump(CONFIG, f, indent=2)
+        json.dump(data, f, indent=2)
     os.chmod(tmp, 0o600)
     os.replace(tmp, CONFIG_PATH)
 
 
 CONFIG = load_config()
+if KEYCHAIN:
+    try:
+        with open(CONFIG_PATH) as f:
+            if any(k in json.load(f) for k in SECRET_KEYS):
+                save_config()  # migrate plain-text passwords out of the file
+    except Exception:
+        pass
 
 
 def have_creds():
@@ -203,11 +252,6 @@ class Camera:
         self._tapo = None
         self._tapo_fail_at = 0
         self.onvif = Onvif(self.ip)
-
-    def rtsp_url(self, quality):
-        u = urllib.parse.quote(CONFIG["username"], safe="")
-        p = urllib.parse.quote(CONFIG["password"], safe="")
-        return f"rtsp://{u}:{p}@{self.ip}:{RTSP_PORT}/{'stream1' if quality == 'hd' else 'stream2'}"
 
     def info(self):
         return {"ip": self.ip, "name": self.name, "model": self.model, "online": self.online,
@@ -390,6 +434,184 @@ def _xml(s):
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+# ---------------------------------------------------------------- RTSP relay
+#
+# ffmpeg only takes RTSP credentials inside the URL on its command line, and any user on the
+# machine can read another process's command line. So ffmpeg never gets the login: it connects
+# to a one-shot relay on 127.0.0.1 and the relay answers the camera's auth challenge itself.
+# The relay only serves a connection the OS confirms belongs to the ffmpeg process we started.
+
+def spawn_ffmpeg(cam, quality, pre, post, **popen_kw):
+    lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    lsock.bind(("127.0.0.1", 0))
+    lsock.listen(8)
+    url = f"rtsp://127.0.0.1:{lsock.getsockname()[1]}/{'stream1' if quality == 'hd' else 'stream2'}"
+    proc = subprocess.Popen([FFMPEG, *pre, "-rtsp_transport", "tcp", "-i", url, *post], **popen_kw)
+    threading.Thread(target=_relay_accept, args=(lsock, proc, cam), daemon=True).start()
+    return proc
+
+
+def _owned_by(pid, peer, local):
+    for _ in range(20):  # the connection can take a moment to show up in the process's table
+        try:
+            for c in psutil.Process(pid).net_connections(kind="tcp4"):
+                if c.laddr and c.raddr and tuple(c.laddr) == peer and tuple(c.raddr) == local:
+                    return True
+        except psutil.Error:
+            return False
+        time.sleep(0.05)
+    return False
+
+
+def _relay_accept(lsock, proc, cam):
+    lsock.settimeout(1)
+    local = lsock.getsockname()
+    try:
+        while proc.poll() is None:
+            try:
+                conn, peer = lsock.accept()
+            except socket.timeout:
+                continue
+            if not _owned_by(proc.pid, peer, local):
+                conn.close()  # someone else on this machine - not our ffmpeg
+                continue
+            try:
+                RtspRelay(conn, cam)
+            except OSError:
+                conn.close()
+            return  # ffmpeg only opens one control connection
+    finally:
+        lsock.close()
+
+
+def _read_rtsp(f):
+    """Next message from a buffered socket file: bytes for an interleaved ($) data frame,
+    otherwise (start_line, [(name, value)], body). None on EOF."""
+    first = f.read(1)
+    if not first:
+        return None
+    if first == b"$":
+        hdr = f.read(3)
+        return first + hdr + f.read(int.from_bytes(hdr[1:3], "big"))
+    start = (first + f.readline()).decode("utf-8", "replace").strip()
+    headers = []
+    while True:
+        line = f.readline()
+        if not line:
+            return None
+        line = line.decode("utf-8", "replace").strip()
+        if not line:
+            break
+        name, _, value = line.partition(":")
+        headers.append((name.strip(), value.strip()))
+    n = next((int(v) for k, v in headers if k.lower() == "content-length"), 0)
+    return start, headers, f.read(n) if n else b""
+
+
+def _build_rtsp(start, headers, body):
+    lines = [start] + [f"{k}: {v}" for k, v in headers]
+    return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+
+
+class RtspRelay:
+    def __init__(self, client, cam):
+        self.client = client
+        self.base = f"rtsp://{cam.ip}:{RTSP_PORT}"
+        self.cam = socket.create_connection((cam.ip, RTSP_PORT), timeout=10)
+        self.cam.settimeout(None)
+        self.lock = threading.Lock()
+        self.pending = collections.deque()  # requests waiting for the camera's reply
+        self.challenge = None
+        self.nc = 0
+        threading.Thread(target=self._from_client, daemon=True).start()
+        threading.Thread(target=self._from_camera, daemon=True).start()
+
+    def _close(self):
+        for s in (self.client, self.cam):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            s.close()
+
+    def _auth(self, method, uri):
+        ch, user, pw = self.challenge, CONFIG["username"], CONFIG["password"]
+        if ch["scheme"] == "basic":
+            return "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+        algo = ch.get("algorithm", "MD5")
+        H = hashlib.sha256 if algo.upper().startswith("SHA-256") else hashlib.md5
+        h = lambda x: H(x.encode()).hexdigest()
+        ha1, ha2 = h(f"{user}:{ch.get('realm', '')}:{pw}"), h(f"{method}:{uri}")
+        fields = {"username": user, "realm": ch.get("realm", ""), "nonce": ch.get("nonce", ""), "uri": uri}
+        if "auth" in ch.get("qop", "").split(","):
+            self.nc += 1
+            nc, cnonce = f"{self.nc:08x}", secrets.token_hex(8)
+            fields["response"] = h(f"{ha1}:{fields['nonce']}:{nc}:{cnonce}:auth:{ha2}")
+            extra = f', qop=auth, nc={nc}, cnonce="{cnonce}"'
+        else:
+            fields["response"] = h(f"{ha1}:{fields['nonce']}:{ha2}")
+            extra = ""
+        if "opaque" in ch:
+            fields["opaque"] = ch["opaque"]
+        if "algorithm" in ch:
+            extra += f", algorithm={algo}"
+        return "Digest " + ", ".join(f'{k}="{v}"' for k, v in fields.items()) + extra
+
+    def _send(self, req):
+        method, uri, ver, headers, body = req["method"], req["uri"], req["ver"], req["headers"], req["body"]
+        if self.challenge:
+            headers = headers + [("Authorization", self._auth(method, uri))]
+        with self.lock:
+            self.cam.sendall(_build_rtsp(f"{method} {uri} {ver}", headers, body))
+
+    def _from_client(self):
+        f = self.client.makefile("rb")
+        try:
+            while (msg := _read_rtsp(f)) is not None:
+                if isinstance(msg, bytes):
+                    with self.lock:
+                        self.cam.sendall(msg)
+                    continue
+                start, headers, body = msg
+                method, uri, ver = (start.split(" ", 2) + ["", ""])[:3]
+                req = {"method": method, "uri": re.sub(r"^rtsp://[^/]+", self.base, uri), "ver": ver,
+                       "headers": [(k, v) for k, v in headers if k.lower() != "authorization"],
+                       "body": body, "retried": False}
+                self.pending.append(req)
+                self._send(req)
+        except OSError:
+            pass
+        finally:
+            self._close()
+
+    def _from_camera(self):
+        f = self.cam.makefile("rb")
+        try:
+            while (msg := _read_rtsp(f)) is not None:
+                if isinstance(msg, bytes):
+                    self.client.sendall(msg)
+                    continue
+                start, headers, body = msg
+                req = self.pending.popleft() if self.pending else None
+                if " 401 " in f"{start} " and req and not req["retried"]:
+                    offers = [v for k, v in headers if k.lower() == "www-authenticate"]
+                    offer = next((o for o in offers if o.lower().startswith("digest")), offers[0] if offers else "")
+                    if offer:
+                        self.challenge = {k.lower(): a or b for k, a, b in
+                                          re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]*))', offer)}
+                        self.challenge["scheme"] = offer.split()[0].lower()
+                        req["retried"] = True
+                        self.pending.appendleft(req)
+                        self._send(req)
+                        continue
+                # a 401 we already retried goes through, so ffmpeg reports bad credentials
+                self.client.sendall(_build_rtsp(start, headers, body))
+        except OSError:
+            pass
+        finally:
+            self._close()
+
+
 # ---------------------------------------------------------------- video: RTSP -> MJPEG
 
 class Stream:
@@ -412,10 +634,11 @@ class Stream:
                 self.cam.error = "Enter the camera account username/password in Settings"
                 time.sleep(2)
                 continue
-            cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-rtsp_transport", "tcp",
-                   "-timeout", "5000000", "-i", self.cam.rtsp_url(self.quality),
-                   "-an", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "4" if self.quality == "hd" else "6", "-"]
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            self.proc = spawn_ffmpeg(
+                self.cam, self.quality,
+                ["-hide_banner", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-timeout", "5000000"],
+                ["-an", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "4" if self.quality == "hd" else "6", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             errbuf = []
             threading.Thread(target=lambda: errbuf.extend(self.proc.stderr.read().decode("utf-8", "replace").splitlines()),
                              daemon=True).start()
@@ -507,10 +730,9 @@ def start_recording(cam):
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", cam.name).strip("_") or cam.ip
     cam.record_file = os.path.join(RECORD_DIR, f"{safe}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.mkv")
     # stream copy: no re-encode, full camera quality incl. audio. MKV survives an abrupt stop.
-    cam.recorder = subprocess.Popen(
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-i", cam.rtsp_url("hd"),
-         "-map", "0", "-c", "copy", cam.record_file],
-        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    cam.recorder = spawn_ffmpeg(cam, "hd", ["-hide_banner", "-loglevel", "error"],
+                                ["-map", "0", "-c", "copy", cam.record_file],
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def stop_recording(cam):
@@ -659,6 +881,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"cameras": [c.info() for c in CAMERAS.values()], "scan": STATE,
                             "has_creds": have_creds(), "has_cloud": bool(CONFIG["cloud_password"]),
                             "username": CONFIG["username"], "manual_ips": CONFIG["manual_ips"],
+                            "keychain": KEYCHAIN is not None,
                             "record_dir": RECORD_DIR})
             elif u.path == "/api/status":
                 self._json(tapo_status(self._cam(q)))
@@ -788,10 +1011,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
-        p = subprocess.Popen([FFMPEG, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
-                              "-i", cam.rtsp_url("sd"), "-vn", "-c:a", "libmp3lame", "-b:a", "64k",
-                              "-flush_packets", "1", "-f", "mp3", "-"],
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+        p = spawn_ffmpeg(cam, "sd", ["-hide_banner", "-loglevel", "error"],
+                         ["-vn", "-c:a", "libmp3lame", "-b:a", "64k", "-flush_packets", "1", "-f", "mp3", "-"],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         try:
             while True:
                 chunk = p.stdout.read(4096)

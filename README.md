@@ -87,7 +87,7 @@ Running it again while it's already running just opens the page.
 
 Pan/tilt: click an arrow to nudge, hold it to keep moving. Arrow keys work too. The middle button recalibrates the motor.
 
-Settings are saved to `~/.config/tapo-camera-viewer/config.json` (only readable by your user). Recordings go to `~/Videos/tapo-camera-viewer/`.
+Passwords go in your system keychain (GNOME Keyring / KWallet on Linux, Keychain on macOS, Credential Manager on Windows). Everything else is in `~/.config/tapo-camera-viewer/config.json`. Recordings go to `~/Videos/tapo-camera-viewer/`.
 
 ## Troubleshooting
 
@@ -109,11 +109,13 @@ Switch to SD in the quality dropdown. HD is the full main stream and can be heav
 rm -rf ~/.local/share/tapo-camera-viewer ~/.local/bin/tapo-camera-viewer ~/.local/share/applications/tapo-camera-viewer.desktop ~/.config/tapo-camera-viewer
 ```
 
+Saved passwords stay in your system keychain. Delete the `tapo-camera-viewer` entries from your keychain app if you want those gone too.
+
 ## Notes
 
 The server only listens on 127.0.0.1, so other devices on your network can't reach it, and it refuses requests coming from other websites. There's no login on the web UI though, so anyone with an account on the same computer can open it. Don't expose it to other machines.
 
-Your camera passwords are stored in plain text in the config file (readable only by your user). The camera account password is also visible to other local users in the process list while a stream is running, which is how ffmpeg takes RTSP credentials. On a single-user machine this doesn't matter.
+Passwords never touch disk in plain text as long as you have a keychain. If you don't (some minimal Linux setups), it falls back to the config file and Settings tells you so. They also never show up in the process list: ffmpeg connects to a small relay inside the app, which handles the camera login, and the relay only accepts connections from the ffmpeg process it started.
 
 Not affiliated with TP-Link. "Tapo" is their trademark.
 

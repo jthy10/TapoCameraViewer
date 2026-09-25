@@ -140,7 +140,8 @@
     <input id="sCloud" type="password" placeholder="(unchanged)" autocomplete="new-password">
     <label>Camera IP addresses to always check (optional, one per line)</label>
     <textarea id="sIps" rows="3" style="width:100%"></textarea>
-    <p class="note">Saved to ~/.config/tapo-camera-viewer/config.json (readable only by you). Recordings go to <span id="recDir"></span>.</p>
+    <p class="note" id="storeNote"></p>
+    <p class="note">Recordings go to <span id="recDir"></span>.</p>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
       <button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button>
       <button class="primary" id="sSave" value="save">Save</button>
@@ -191,6 +192,9 @@ function render() {
   const cams = state.cameras;
   $('#scanNote').textContent = state.scan.scan_note || '';
   $('#recDir').textContent = state.record_dir;
+  $('#storeNote').textContent = state.keychain
+    ? 'Passwords are stored in your system keychain.'
+    : 'No system keychain found, so passwords are saved in plain text in ~/.config/tapo-camera-viewer/config.json (readable only by you).';
   const tabs = $('#tabs'); tabs.innerHTML = '';
   cams.forEach(c => {
     const el = document.createElement('div');
