@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tapo Camera Viewer</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --text:#e6e8ec; --dim:#8b93a3; --acc:#4f9dff; --ok:#3ecf8e; --bad:#ff5d5d; --warn:#f5b041; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 8px 0 0; letter-spacing:.5px; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
+  .tab { padding:6px 12px; border-radius:6px; background:var(--panel); border:1px solid var(--line); cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .tab.active { border-color:var(--acc); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); }
+  .dot.on { background:var(--ok); } .dot.off { background:var(--bad); }
+  button, select, input { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
+  button { cursor:pointer; } button:hover { border-color:var(--acc); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.danger { border-color:var(--bad); color:var(--bad); }
+  button.active { background:var(--acc); border-color:var(--acc); color:#fff; }
+  main { display:grid; grid-template-columns: 1fr 320px; gap:16px; padding:16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .video-wrap { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; }
+  .video-wrap img { width:100%; height:100%; object-fit:contain; }
+  .video-wrap:fullscreen img { object-fit:contain; }
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--dim); text-align:center; padding:20px; background:rgba(0,0,0,.55); }
+  .spinner { width:34px; height:34px; border:3px solid var(--line); border-top-color:var(--acc); border-radius:50%; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .rec-badge { position:absolute; top:10px; left:10px; background:var(--bad); color:#fff; padding:2px 8px; border-radius:4px; font-weight:600; font-size:12px; }
+  .toolbar { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  .panel h3 { margin:0 0 10px; font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); }
+  .dpad { display:grid; grid-template-columns:repeat(3, 56px); grid-template-rows:repeat(3, 56px); gap:6px; justify-content:center; user-select:none; }
+  .dpad button { font-size:20px; padding:0; touch-action:none; }
+  .row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; gap:8px; }
+  .switch { position:relative; width:40px; height:22px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .switch span { position:absolute; inset:0; background:var(--line); border-radius:22px; cursor:pointer; transition:.2s; }
+  .switch span:before { content:""; position:absolute; width:16px; height:16px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+  .switch input:checked + span { background:var(--acc); }
+  .switch input:checked + span:before { transform:translateX(18px); }
+  .switch input:disabled + span { opacity:.35; cursor:not-allowed; }
+  .presets { display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto; }
+  .preset { display:flex; gap:6px; } .preset button:first-child { flex:1; text-align:left; }
+  .note { color:var(--dim); font-size:12px; }
+  .err { color:var(--bad); font-size:13px; }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--line); padding:8px 14px; border-radius:6px; z-index:10; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px; width:min(460px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog label { display:block; margin:10px 0 4px; color:var(--dim); font-size:12px; }
+  dialog input, dialog textarea { width:100%; }
+  textarea { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px; }
+  .confirm { display:none; gap:6px; } .confirm.show { display:flex; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tapo Camera Viewer</h1>
+  <div class="tabs" id="tabs"></div>
+  <span class="note" id="scanNote"></span>
+  <button id="rescanBtn" title="Search the network again">Rescan</button>
+  <button id="settingsBtn">Settings</button>
+  <button id="quitBtn" class="danger" title="Stop the server">Quit</button>
+</header>
+
+<main>
+  <section>
+    <div class="video-wrap" id="videoWrap">
+      <img id="video" alt="">
+      <div class="rec-badge" id="recBadge" hidden>● REC</div>
+      <div class="overlay" id="overlay"><div class="spinner"></div><div id="overlayText">Starting…</div></div>
+    </div>
+    <div class="toolbar" id="toolbar">
+      <select id="quality" title="Stream quality">
+        <option value="hd">HD (main stream)</option>
+        <option value="sd">SD (sub stream, lighter)</option>
+      </select>
+      <button id="fsBtn">⛶ Fullscreen</button>
+      <button id="snapBtn">📸 Snapshot</button>
+      <button id="recBtn">⏺ Record</button>
+      <button id="audioBtn">🔈 Listen</button>
+      <audio id="audio" preload="none"></audio>
+      <span style="flex:1"></span>
+      <button id="renameBtn" title="Rename this camera">✎ Rename</button>
+    </div>
+    <div class="err" id="camErr" style="margin-top:8px"></div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h3>Pan / Tilt</h3>
+      <div class="dpad" id="dpad">
+        <button data-dir="upleft">↖</button><button data-dir="up">▲</button><button data-dir="upright">↗</button>
+        <button data-dir="left">◀</button><button id="calBtn" title="Calibrate motor">◎</button><button data-dir="right">▶</button>
+        <button data-dir="downleft">↙</button><button data-dir="down">▼</button><button data-dir="downright">↘</button>
+      </div>
+      <p class="note" style="text-align:center;margin:8px 0 0">Click to nudge, hold to move. Arrow keys work too.</p>
+    </div>
+
+    <div class="panel">
+      <h3>Presets</h3>
+      <div class="presets" id="presets"><span class="note">—</span></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input id="presetName" placeholder="Name for current position" style="flex:1;min-width:0">
+        <button id="presetSave">Save</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Camera settings</h3>
+      <div id="cloudNote" class="note" style="margin-bottom:6px"></div>
+      <div class="row"><span>Privacy mode (lens off)</span><label class="switch"><input type="checkbox" data-ctl="privacy"><span></span></label></div>
+      <div class="row"><span>Night vision</span>
+        <select data-ctl="night_vision"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></div>
+      <div class="row"><span>Status LED</span><label class="switch"><input type="checkbox" data-ctl="led"><span></span></label></div>
+      <div class="row"><span>Motion detection</span><label class="switch"><input type="checkbox" data-ctl="motion"><span></span></label></div>
+      <div class="row"><span>Person detection</span><label class="switch"><input type="checkbox" data-ctl="person"><span></span></label></div>
+      <div class="row"><span>Auto-track</span><label class="switch"><input type="checkbox" data-ctl="autotrack"><span></span></label></div>
+      <div class="row"><span>Alarm on detection</span><label class="switch"><input type="checkbox" data-ctl="alarm"><span></span></label></div>
+      <div class="row"><span>Flip image</span><label class="switch"><input type="checkbox" data-ctl="flip"><span></span></label></div>
+      <div class="row"><span>Lens distortion correction</span><label class="switch"><input type="checkbox" data-ctl="lens_correction"><span></span></label></div>
+      <div class="row"><span>Siren</span><span><button id="sirenOn">Sound</button> <button id="sirenOff">Stop</button></span></div>
+      <div class="row"><span>Reboot camera</span>
+        <span><button id="rebootBtn" class="danger">Reboot</button>
+        <span class="confirm" id="rebootConfirm"><button class="danger" id="rebootYes">Yes, reboot</button><button id="rebootNo">Cancel</button></span></span></div>
+    </div>
+  </aside>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <h3 style="margin-top:0">Settings</h3>
+    <p class="note">Tapo app → your camera → ⚙ → Advanced Settings → <b>Camera Account</b>. That username/password is used for video, audio, pan/tilt and presets.<br>Also turn on Tapo app → Me → Tapo Lab → <b>Third-Party Compatibility</b> or the camera will refuse the login.</p>
+    <label>Camera account username</label><input id="sUser" autocomplete="off">
+    <label>Camera account password</label><input id="sPass" type="password" placeholder="(unchanged)" autocomplete="new-password">
+    <label>Tapo app (TP-Link ID) password — optional, unlocks privacy mode, night vision, LED, detection, siren, reboot…</label>
+    <input id="sCloud" type="password" placeholder="(unchanged)" autocomplete="new-password">
+    <label>Camera IP addresses to always check (optional, one per line)</label>
+    <textarea id="sIps" rows="3" style="width:100%"></textarea>
+    <p class="note">Saved to ~/.config/tapo-camera-viewer/config.json (readable only by you). Recordings go to <span id="recDir"></span>.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button>
+      <button class="primary" id="sSave" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="renameDlg">
+  <form method="dialog">
+    <label>Camera name</label><input id="renameInput">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button><button class="primary" id="renameSave" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let state = null, current = null, streamKey = null, statusTimer = null, audioOn = false;
+let quality = localStorage.getItem('quality') || 'hd';
+$('#quality').value = quality;
+
+function toast(msg, ms = 2500) {
+  const t = $('#toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, ms);
+}
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function overlay(text, spin = true) {
+  $('#overlay').hidden = !text;
+  $('#overlayText').textContent = text || '';
+  $('#overlay .spinner').style.display = spin ? '' : 'none';
+}
+
+async function poll() {
+  try { state = await api('/api/state'); } catch { overlay('tapo-camera-viewer is not running. Start it again and reload this page.', false); return; }
+  render();
+}
+
+function render() {
+  const cams = state.cameras;
+  $('#scanNote').textContent = state.scan.scan_note || '';
+  $('#recDir').textContent = state.record_dir;
+  const tabs = $('#tabs'); tabs.innerHTML = '';
+  cams.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'tab' + (current === c.ip ? ' active' : '');
+    el.innerHTML = `<span class="dot ${c.online ? 'on' : 'off'}"></span>`;
+    el.append(c.name);
+    el.onclick = () => select(c.ip);
+    tabs.append(el);
+  });
+  if (!state.has_creds) {
+    overlay('Enter your camera account in Settings to load the feed.', false);
+    if (!$('#settings').open && !render.askedCreds) { render.askedCreds = true; openSettings(); }
+  }
+  if (!current || !cams.find(c => c.ip === current)) {
+    if (cams.length) { select((cams.find(c => c.online) || cams[0]).ip); return; }
+    stopVideo();
+    overlay(state.has_creds ? (state.scan.scan_note || 'Searching for cameras…') : 'Enter your camera account in Settings. Searching for cameras in the meantime.', state.has_creds);
+    return;
+  }
+  const cam = cams.find(c => c.ip === current);
+  $('#camErr').textContent = cam.error || '';
+  $('#recBadge').hidden = !cam.recording;
+  $('#recBtn').classList.toggle('active', cam.recording);
+  $('#recBtn').textContent = cam.recording ? '⏹ Stop recording' : '⏺ Record';
+  $('#cloudNote').textContent = state.has_cloud ? '' : 'Add your Tapo app password in Settings to enable these.';
+  if (!cam.online) overlay(`${cam.name} is offline — waiting for it to come back…`);
+  else if (state.has_creds) ensureVideo();
+}
+
+function select(ip) {
+  if (current === ip) return;
+  current = ip; streamKey = null; stopAudio();
+  render(); loadPresets(); loadStatus();
+  clearInterval(statusTimer); statusTimer = setInterval(loadStatus, 15000);
+}
+
+// The MJPEG stream is read with fetch() rather than <img src>, so the browser never shows a
+// never-ending "page loading" spinner and we know exactly when a frame arrives.
+let videoAbort = null, frameUrl = null;
+function ensureVideo() {
+  const key = current + '|' + quality;
+  if (streamKey === key) return;
+  stopVideo();
+  streamKey = key;
+  overlay('Connecting to video…');
+  const ctl = videoAbort = new AbortController();
+  readMjpeg(`/video?ip=${encodeURIComponent(current)}&q=${quality}`, ctl.signal)
+    .catch(() => {})
+    .finally(() => { if (videoAbort === ctl) { videoAbort = null; streamKey = null; } });  // next poll reconnects
+}
+function stopVideo() {
+  if (videoAbort) videoAbort.abort();
+  videoAbort = null; streamKey = null;
+  $('#video').removeAttribute('src');
+  if (frameUrl) { URL.revokeObjectURL(frameUrl); frameUrl = null; }
+}
+function showFrame(bytes) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+  const img = $('#video'), old = frameUrl;
+  frameUrl = url;
+  img.src = url;
+  if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
+  if (!$('#overlay').hidden) overlay(null);
+}
+async function readMjpeg(url, signal) {
+  const res = await fetch(url, { signal, cache: 'no-store' });
+  if (!res.ok || !res.body) throw new Error('stream ' + res.status);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = new Uint8Array(0), need = -1, pending = null;
+  const indexOf = (arr, seq) => {
+    outer: for (let i = 0; i <= arr.length - seq.length; i++) { for (let j = 0; j < seq.length; j++) if (arr[i + j] !== seq[j]) continue outer; return i; }
+    return -1;
+  };
+  const CRLF2 = [13, 10, 13, 10];
+  let latest = null;
+  const paint = () => { pending = null; if (latest) { showFrame(latest); latest = null; } };
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    const merged = new Uint8Array(buf.length + value.length); merged.set(buf); merged.set(value, buf.length); buf = merged;
+    while (true) {
+      if (need < 0) {
+        const h = indexOf(buf.subarray(0, Math.min(buf.length, 512)), CRLF2);
+        if (h < 0) break;
+        const m = /Content-Length:\s*(\d+)/i.exec(dec.decode(buf.subarray(0, h)));
+        buf = buf.subarray(h + 4);
+        need = m ? +m[1] : -1;
+        if (need < 0) continue;
+      }
+      if (buf.length < need + 2) break;
+      latest = buf.slice(0, need);          // keep only the newest frame; paint once per animation frame
+      buf = buf.subarray(need + 2); need = -1;
+      if (!pending) pending = requestAnimationFrame(paint);
+    }
+  }
+}
+
+$('#quality').onchange = e => { quality = e.target.value; localStorage.setItem('quality', quality); streamKey = null; render(); };
+$('#fsBtn').onclick = () => document.fullscreenElement ? document.exitFullscreen() : $('#videoWrap').requestFullscreen();
+$('#videoWrap').ondblclick = () => $('#fsBtn').click();
+$('#snapBtn').onclick = () => { if (current) location.href = `/snapshot?ip=${encodeURIComponent(current)}`; };
+$('#recBtn').onclick = async () => {
+  const cam = state.cameras.find(c => c.ip === current); if (!cam) return;
+  try { const r = await api('/api/record', { ip: current, on: !cam.recording }); toast(cam.recording ? 'Saved ' + cam.record_file : 'Recording to ' + r.file, 4000); poll(); }
+  catch (e) { toast(e.message); }
+};
+function stopAudio() { const a = $('#audio'); a.pause(); a.removeAttribute('src'); a.load(); audioOn = false; $('#audioBtn').textContent = '🔈 Listen'; $('#audioBtn').classList.remove('active'); }
+$('#audioBtn').onclick = () => {
+  if (audioOn || !current) return stopAudio();
+  const a = $('#audio'); a.src = `/audio?ip=${encodeURIComponent(current)}&t=${Date.now()}`;
+  a.play().then(() => { audioOn = true; $('#audioBtn').textContent = '🔊 Mute'; $('#audioBtn').classList.add('active'); }).catch(e => toast('Audio: ' + e.message));
+};
+
+// ---- PTZ
+const dirKeys = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+let holdTimer = null, moving = false;
+function ptz(dir, mode) { return current && api('/api/ptz', { ip: current, dir, mode }).catch(e => toast('Pan/tilt: ' + e.message)); }
+function press(dir) { clearTimeout(holdTimer); holdTimer = setTimeout(() => { moving = true; ptz(dir, 'start'); }, 300); }
+function release(dir) {
+  clearTimeout(holdTimer);
+  if (moving) { moving = false; ptz(dir, 'stop'); } else ptz(dir, 'step');
+}
+document.querySelectorAll('#dpad [data-dir]').forEach(b => {
+  b.onpointerdown = e => { b.setPointerCapture(e.pointerId); press(b.dataset.dir); };
+  b.onpointerup = () => release(b.dataset.dir);
+});
+const held = {};
+document.addEventListener('keydown', e => {
+  const d = dirKeys[e.key]; if (!d || e.target.matches('input,textarea,select')) return;
+  e.preventDefault(); if (held[d]) return; held[d] = true; press(d);
+});
+document.addEventListener('keyup', e => { const d = dirKeys[e.key]; if (d && held[d]) { held[d] = false; release(d); } });
+$('#calBtn').onclick = () => control('calibrate', true, 'Calibrating motor…');
+
+// ---- presets
+async function loadPresets() {
+  const box = $('#presets');
+  if (!current || !state?.has_creds) { box.innerHTML = '<span class="note">—</span>'; return; }
+  try {
+    const list = await api(`/api/presets?ip=${encodeURIComponent(current)}`);
+    box.innerHTML = list.length ? '' : '<span class="note">No presets saved.</span>';
+    list.forEach(p => {
+      const row = document.createElement('div'); row.className = 'preset';
+      const go = document.createElement('button'); go.textContent = p.name;
+      go.onclick = () => api('/api/preset', { ip: current, op: 'goto', id: p.id }).catch(e => toast(e.message));
+      const del = document.createElement('button'); del.textContent = '✕'; del.title = 'Delete preset';
+      del.onclick = () => { if (del.dataset.armed) api('/api/preset', { ip: current, op: 'delete', id: p.id }).then(loadPresets).catch(e => toast(e.message)); else { del.dataset.armed = 1; del.textContent = 'Delete?'; del.classList.add('danger'); } };
+      row.append(go, del); box.append(row);
+    });
+  } catch (e) { box.innerHTML = `<span class="note">Presets unavailable: ${e.message}</span>`; }
+}
+$('#presetSave').onclick = async () => {
+  const name = $('#presetName').value.trim(); if (!name) return toast('Give the preset a name');
+  try { await api('/api/preset', { ip: current, op: 'save', name }); $('#presetName').value = ''; toast('Preset saved'); loadPresets(); } catch (e) { toast(e.message); }
+};
+
+// ---- advanced controls
+async function loadStatus() {
+  const ctls = document.querySelectorAll('[data-ctl]');
+  if (!current || !state?.has_cloud) { ctls.forEach(c => c.disabled = true); return; }
+  try {
+    const s = await api(`/api/status?ip=${encodeURIComponent(current)}`);
+    ctls.forEach(c => {
+      const k = c.dataset.ctl;
+      c.disabled = !(k in s);
+      if (!(k in s)) return;
+      if (c.type === 'checkbox') c.checked = !!s[k]; else c.value = s[k];
+    });
+    $('#cloudNote').textContent = '';
+  } catch (e) { ctls.forEach(c => c.disabled = true); $('#cloudNote').textContent = e.message; }
+}
+async function control(action, value, msg) {
+  try { await api('/api/control', { ip: current, action, value }); if (msg) toast(msg); }
+  catch (e) { toast(e.message, 4000); loadStatus(); }
+}
+document.querySelectorAll('[data-ctl]').forEach(c => c.onchange = () =>
+  control(c.dataset.ctl, c.type === 'checkbox' ? c.checked : c.value).then(() => c.dataset.ctl === 'privacy' && setTimeout(() => { streamKey = null; render(); }, 1500)));
+$('#sirenOn').onclick = () => control('siren', true, 'Siren on');
+$('#sirenOff').onclick = () => control('siren', false, 'Siren off');
+$('#rebootBtn').onclick = () => { $('#rebootBtn').hidden = true; $('#rebootConfirm').classList.add('show'); };
+$('#rebootNo').onclick = () => { $('#rebootBtn').hidden = false; $('#rebootConfirm').classList.remove('show'); };
+$('#rebootYes').onclick = () => { $('#rebootNo').click(); control('reboot', true, 'Rebooting camera — feed returns in ~1 minute'); };
+
+// ---- settings / rename / misc
+function openSettings() {
+  $('#settings').returnValue = '';
+  $('#sUser').value = state?.username || ''; $('#sPass').value = ''; $('#sCloud').value = '';
+  $('#sPass').placeholder = state?.has_creds ? '(unchanged)' : 'required';
+  $('#sCloud').placeholder = state?.has_cloud ? '(unchanged)' : 'optional';
+  $('#sIps').value = (state?.manual_ips || []).join('\n');
+  $('#settings').showModal();
+}
+$('#settingsBtn').onclick = openSettings;
+$('#settings').onclose = async () => {
+  if ($('#settings').returnValue !== 'save') return;
+  try {
+    await api('/api/settings', { username: $('#sUser').value.trim(), password: $('#sPass').value, cloud_password: $('#sCloud').value, manual_ips: $('#sIps').value.split(/\s+/) });
+    toast('Saved'); streamKey = null; await poll(); loadPresets(); loadStatus();
+  } catch (e) { toast(e.message); }
+};
+$('#renameBtn').onclick = () => { const c = state?.cameras.find(c => c.ip === current); if (!c) return; $('#renameInput').value = c.name; $('#renameDlg').showModal(); };
+$('#renameDlg').onclose = () => { if ($('#renameDlg').returnValue === 'save') api('/api/rename', { ip: current, name: $('#renameInput').value.trim() }).then(poll); };
+$('#rescanBtn').onclick = () => api('/api/rescan', {}).then(() => toast('Searching…'));
+$('#quitBtn').onclick = async () => {
+  if (!$('#quitBtn').dataset.armed) { $('#quitBtn').dataset.armed = 1; $('#quitBtn').textContent = 'Really quit?'; setTimeout(() => { delete $('#quitBtn').dataset.armed; $('#quitBtn').textContent = 'Quit'; }, 3000); return; }
+  stopVideo(); stopAudio(); await api('/api/quit', {}).catch(() => {}); overlay('tapo-camera-viewer has stopped. Start it again and reload this page.', false); clearInterval(pollTimer);
+};
+
+poll();
+const pollTimer = setInterval(poll, 2000);
+</script>
+</body>
+</html>

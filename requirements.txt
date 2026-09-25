@@ -1,0 +1,2 @@
+imageio-ffmpeg>=0.5
+pytapo>=3.3
