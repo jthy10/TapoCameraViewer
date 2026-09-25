@@ -12,7 +12,7 @@ What it does:
 - privacy mode, night vision, LED, motion/person detection, auto-track, siren, reboot, etc. (needs your Tapo app password, see below)
 - handles multiple cameras
 
-Tested with a Tapo C113 on Ubuntu 24.04. Other Tapo models that support RTSP/ONVIF (C100, C200, C210, C220, C310, TC70...) should work. Some controls only show up if your model supports them.
+Tested with a Tapo C113 on Ubuntu 24.04 and Windows. macOS should work through the install script but hasn't been tested yet. Other Tapo models that support RTSP/ONVIF (C100, C200, C210, C220, C310, TC70...) should work. Some controls only show up if your model supports them.
 
 ## Camera setup (do this first)
 
@@ -104,6 +104,12 @@ Make sure you're on the same network/subnet as the camera. Some routers block mu
 
 **Advanced controls say "login failed" or the camera is locked out**
 That's the Tapo app password. If you enter it wrong a few times, the camera temporarily suspends logins for a while. This app doesn't retry a failed login automatically for this reason. Fix the password in Settings and wait it out if you're locked.
+
+**Still rejected even though the password is right**
+The camera temporarily blocks logins after too many failed attempts. Close everything that talks to the camera (this app, VLC, Home Assistant, Blue Iris, etc.), wait about 30 minutes, then enter the login once, carefully.
+
+**Something else is wrong**
+Run it from a terminal with `--debug` (Windows: open Command Prompt in the folder with the exe and run `TapoCameraViewer-windows.exe --debug`). It prints each step of the connection to the camera. Passwords are never printed, only their length. Include that output if you open an issue.
 
 **Video is laggy**
 Switch to SD in the quality dropdown. HD is the full main stream and can be heavy over Wi-Fi.
