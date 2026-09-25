@@ -45,6 +45,12 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 RTSP_PORT, ONVIF_PORT = 554, 2020
 
 LOCK = threading.RLock()
+DEBUG = False
+
+
+def debug(*a):
+    if DEBUG:
+        print(time.strftime("%H:%M:%S"), *a, flush=True)
 
 
 # ---------------------------------------------------------------- config
@@ -475,11 +481,13 @@ def _relay_accept(lsock, proc, cam):
             except socket.timeout:
                 continue
             if not _owned_by(proc.pid, peer, local):
+                debug(f"relay: rejected connection from {peer} (not our ffmpeg, pid {proc.pid})")
                 conn.close()  # someone else on this machine - not our ffmpeg
                 continue
             try:
                 RtspRelay(conn, cam)
-            except OSError:
+            except OSError as e:
+                debug(f"relay: can't reach camera {cam.ip}:{RTSP_PORT}: {e}")
                 conn.close()
             return  # ffmpeg only opens one control connection
     finally:
@@ -563,6 +571,7 @@ class RtspRelay:
         method, uri, ver, headers, body = req["method"], req["uri"], req["ver"], req["headers"], req["body"]
         if self.challenge:
             headers = headers + [("Authorization", self._auth(method, uri))]
+        debug(f"relay -> camera: {method} {uri}", f"(auth: {self.challenge['scheme']})" if self.challenge else "(no auth)")
         with self.lock:
             self.cam.sendall(_build_rtsp(f"{method} {uri} {ver}", headers, body))
 
@@ -595,6 +604,7 @@ class RtspRelay:
                     continue
                 start, headers, body = msg
                 req = self.pending.popleft() if self.pending else None
+                debug(f"camera -> relay: {start}", [v for k, v in headers if k.lower() == "www-authenticate"] or "")
                 if " 401 " in f"{start} " and req and not req["retried"]:
                     offers = [v for k, v in headers if k.lower() == "www-authenticate"]
                     offer = next((o for o in offers if o.lower().startswith("digest")), offers[0] if offers else "")
@@ -606,7 +616,10 @@ class RtspRelay:
                         self.pending.appendleft(req)
                         self._send(req)
                         continue
-                # a 401 we already retried goes through, so ffmpeg reports bad credentials
+                if " 401 " in f"{start} ":
+                    # our login was refused. Pass the 401 on without the challenge so ffmpeg gives up
+                    # instead of retrying - every extra bad attempt counts toward the camera's lockout.
+                    headers = [(k, v) for k, v in headers if k.lower() != "www-authenticate"]
                 self.client.sendall(_build_rtsp(start, headers, body))
         except OSError:
             pass
@@ -641,6 +654,9 @@ class Stream:
                 ["-hide_banner", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-timeout", "5000000"],
                 ["-an", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "4" if self.quality == "hd" else "6", "-"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            u = CONFIG["username"]
+            debug(f"stream {self.cam.ip} {self.quality}: username={u!r}, password is {len(CONFIG['password'])} chars"
+                  + (" (has leading/trailing spaces!)" if CONFIG["password"] != CONFIG["password"].strip() else ""))
             errbuf = []
             threading.Thread(target=lambda: errbuf.extend(self.proc.stderr.read().decode("utf-8", "replace").splitlines()),
                              daemon=True).start()
@@ -670,6 +686,8 @@ class Stream:
             if not self.alive:
                 break
             err = " ".join(errbuf)
+            if err:
+                debug(f"ffmpeg ({self.cam.ip} {self.quality}): {err}")
             if "Unauthorized" in err:
                 self.cam.error = ("Camera rejected the login. The Camera Account username and password are case-sensitive, "
                                   "so check them against the Tapo app, and make sure Third-Party Compatibility is ON "
@@ -1031,14 +1049,25 @@ class Handler(BaseHTTPRequestHandler):
 
 # ---------------------------------------------------------------- main
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            super().handle_error(request, client_address)  # browser closing a tab isn't worth a traceback
+
+
 def main():
-    global PORT
+    global PORT, DEBUG
     ap = argparse.ArgumentParser(description="Local viewer for TP-Link Tapo cameras.")
     ap.add_argument("--port", type=int, default=PORT, help=f"web UI port (default {PORT})")
     ap.add_argument("--no-browser", action="store_true", help="don't open a browser tab on start")
+    ap.add_argument("--debug", action="store_true", help="print what's happening (never prints passwords)")
     ap.add_argument("--ip", action="append", default=[], metavar="ADDR",
                     help="camera IP to check even if discovery misses it (repeatable)")
     args = ap.parse_args()
+    DEBUG = args.debug
+    debug(f"keychain: {type(KEYCHAIN).__name__ if KEYCHAIN else 'none (using config file)'}, ffmpeg: {FFMPEG}")
     PORT = args.port
     for ip in args.ip:
         if ip not in CONFIG["manual_ips"]:
@@ -1046,13 +1075,12 @@ def main():
 
     url = f"http://{HOST}:{PORT}/"
     try:
-        server = ThreadingHTTPServer((HOST, PORT), Handler)
+        server = Server((HOST, PORT), Handler)
     except OSError:
         # already running - just bring the page up
         print(f"already running at {url}")
         webbrowser.open(url)
         return
-    server.daemon_threads = True
     threading.Thread(target=discovery_loop, daemon=True).start()
     threading.Thread(target=reaper, daemon=True).start()
     print(f"tapo-camera-viewer running at {url}  (Ctrl+C to quit)")
