@@ -17,6 +17,7 @@ import re
 import secrets
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -34,7 +35,8 @@ try:
 except Exception:  # advanced controls just become unavailable
     Tapo = None
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# when frozen by PyInstaller, bundled files (index.html) are unpacked to sys._MEIPASS
+APP_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.expanduser("~/.config/tapo-camera-viewer")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 RECORD_DIR = os.path.expanduser("~/Videos/tapo-camera-viewer")
