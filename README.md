@@ -30,44 +30,49 @@ Your computer also needs to be on the same network as the camera.
 
 ## Install
 
-### Linux / macOS
+### Windows
 
-One command:
+1. Download `TapoCameraViewer-windows.exe` from the [latest release](https://github.com/jthy10/TapoCameraViewer/releases/latest).
+2. Double-click it.
+
+That's it, nothing else to install. Windows will probably show a blue "Windows protected your PC" box the first time, because the exe isn't code-signed (certificates cost money). Click **More info → Run anyway**.
+
+A console window stays open while it runs. Close it (or hit Quit in the web page) to stop.
+
+### Linux
+
+Either grab `TapoCameraViewer-linux` from the [latest release](https://github.com/jthy10/TapoCameraViewer/releases/latest) and run it:
+
+```bash
+chmod +x TapoCameraViewer-linux
+./TapoCameraViewer-linux
+```
+
+or use the install script, which adds a `tapo-camera-viewer` command and an app menu entry (run it again to update):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jthy10/TapoCameraViewer/main/install.sh | bash
 ```
 
-This installs to `~/.local/share/tapo-camera-viewer`, adds a `tapo-camera-viewer` command and, on Linux, puts **Tapo Camera Viewer** in your app menu. Run the same command again to update.
+### macOS
 
-Prefer git?
+No prebuilt app yet. Use the install script (needs Python 3.9+, which you can get from [python.org](https://www.python.org/downloads/) if you don't have it):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jthy10/TapoCameraViewer/main/install.sh | bash
+```
+
+### From source
 
 ```bash
 git clone https://github.com/jthy10/TapoCameraViewer.git
 cd TapoCameraViewer
-./install.sh
+./install.sh        # Windows: install.bat
 ```
-
-You need Python 3.9+ (already there on most Linux distros and macOS). ffmpeg is bundled, so you don't need to install it.
-
-### Windows
-
-1. Install Python from [python.org](https://www.python.org/downloads/) and tick **"Add python.exe to PATH"** during setup.
-2. [Download the zip](https://github.com/jthy10/TapoCameraViewer/archive/refs/heads/main.zip) and extract it.
-3. Double-click `install.bat`.
-4. Double-click `run.bat` to start.
-
-(Windows support hasn't been tested much yet. Open an issue if something breaks.)
 
 ## Usage
 
-Start it from the app menu, or:
-
-```bash
-tapo-camera-viewer
-```
-
-It opens http://127.0.0.1:8765 in your browser. The first time, it asks for:
+Start it (double-click the exe, the app menu entry, or `tapo-camera-viewer`). It opens http://127.0.0.1:8765 in your browser. The first time, it asks for:
 
 - **Camera account username/password**: the one from step 1. Required.
 - **Tapo app password** (optional): your normal TP-Link ID password. Only needed for privacy mode, night vision, LED, detection toggles, siren and reboot. Video and pan/tilt work without it.
@@ -75,7 +80,7 @@ It opens http://127.0.0.1:8765 in your browser. The first time, it asks for:
 
 It keeps scanning in the background, so a camera that's unplugged or rebooting shows up again on its own.
 
-Options:
+Command line options (they work with the exe too):
 
 ```
 tapo-camera-viewer --port 9000         # use a different port
