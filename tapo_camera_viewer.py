@@ -670,10 +670,13 @@ class Stream:
             if not self.alive:
                 break
             err = " ".join(errbuf)
-            if "401" in err or "Unauthorized" in err:
-                self.cam.error = ("Camera rejected the login. Check the Camera Account username/password, and make sure "
-                                  "Third-Party Compatibility is ON (Tapo app > Me > Tapo Lab)")
-                time.sleep(5)
+            if "Unauthorized" in err:
+                self.cam.error = ("Camera rejected the login. The Camera Account username and password are case-sensitive, "
+                                  "so check them against the Tapo app, and make sure Third-Party Compatibility is ON "
+                                  "(Tapo app > Me > Tapo Lab)")
+                # back off: hammering the camera with a bad login can get this computer locked out.
+                # Saving Settings starts a fresh stream right away.
+                time.sleep(30)
             else:
                 self.cam.error = "" if got_frame else ("Stream error: " + err[-200:] if err else "Connecting to stream...")
                 time.sleep(2)
