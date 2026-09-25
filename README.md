@@ -12,7 +12,7 @@ What it does:
 - privacy mode, night vision, LED, motion/person detection, auto-track, siren, reboot, etc. (needs your Tapo app password, see below)
 - handles multiple cameras
 
-Tested with a Tapo C113 on Ubuntu 24.04. Windows and macOS builds are newer and less tested, so open an issue if something breaks. Other Tapo models that support RTSP/ONVIF (C100, C200, C210, C220, C310, TC70...) should work. Some controls only show up if your model supports them.
+Tested with a Tapo C113 on Ubuntu 24.04 and Windows. macOS should work through the install script but hasn't been tested yet. Other Tapo models that support RTSP/ONVIF (C100, C200, C210, C220, C310, TC70...) should work. Some controls only show up if your model supports them.
 
 ## Camera setup (do this first)
 
