@@ -35,7 +35,7 @@ Your computer also needs to be on the same network as the camera.
 One command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jthy10/tapo-camera-viewer/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jthy10/TapoCameraViewer/main/install.sh | bash
 ```
 
 This installs to `~/.local/share/tapo-camera-viewer`, adds a `tapo-camera-viewer` command and, on Linux, puts **Tapo Camera Viewer** in your app menu. Run the same command again to update.
@@ -43,8 +43,8 @@ This installs to `~/.local/share/tapo-camera-viewer`, adds a `tapo-camera-viewer
 Prefer git?
 
 ```bash
-git clone https://github.com/jthy10/tapo-camera-viewer.git
-cd tapo-camera-viewer
+git clone https://github.com/jthy10/TapoCameraViewer.git
+cd TapoCameraViewer
 ./install.sh
 ```
 
@@ -53,7 +53,7 @@ You need Python 3.9+ (already there on most Linux distros and macOS). ffmpeg is 
 ### Windows
 
 1. Install Python from [python.org](https://www.python.org/downloads/) and tick **"Add python.exe to PATH"** during setup.
-2. [Download the zip](https://github.com/jthy10/tapo-camera-viewer/archive/refs/heads/main.zip) and extract it.
+2. [Download the zip](https://github.com/jthy10/TapoCameraViewer/archive/refs/heads/main.zip) and extract it.
 3. Double-click `install.bat`.
 4. Double-click `run.bat` to start.
 
@@ -111,7 +111,9 @@ rm -rf ~/.local/share/tapo-camera-viewer ~/.local/bin/tapo-camera-viewer ~/.loca
 
 ## Notes
 
-The server only listens on 127.0.0.1, so other devices on your network can't reach it. There's no login on the web UI, so don't expose it to other machines.
+The server only listens on 127.0.0.1, so other devices on your network can't reach it, and it refuses requests coming from other websites. There's no login on the web UI though, so anyone with an account on the same computer can open it. Don't expose it to other machines.
+
+Your camera passwords are stored in plain text in the config file (readable only by your user). The camera account password is also visible to other local users in the process list while a stream is running, which is how ffmpeg takes RTSP credentials. On a single-user machine this doesn't matter.
 
 Not affiliated with TP-Link. "Tapo" is their trademark.
 

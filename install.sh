@@ -1,14 +1,14 @@
 #!/bin/bash
 # Tapo Camera Viewer installer (Linux / macOS).
 #
-#   curl -fsSL https://raw.githubusercontent.com/jthy10/tapo-camera-viewer/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jthy10/TapoCameraViewer/main/install.sh | bash
 #
 # or from a cloned repo:  ./install.sh
 #
 # Re-run it any time to update.
 set -e
 
-REPO="jthy10/tapo-camera-viewer"
+REPO="jthy10/TapoCameraViewer"
 APP="tapo-camera-viewer"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }

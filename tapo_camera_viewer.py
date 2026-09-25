@@ -625,6 +625,10 @@ class Handler(BaseHTTPRequestHandler):
         if host not in ("127.0.0.1", "localhost", "[::1]") and host != HOST:
             self._json({"error": "forbidden"}, 403)
             return False
+        # Browsers label cross-site requests; refuse those so other pages can't embed the feed.
+        if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+            self._json({"error": "forbidden"}, 403)
+            return False
         if self.command == "POST" and "application/json" not in (self.headers.get("Content-Type") or ""):
             self._json({"error": "expected application/json"}, 415)
             return False

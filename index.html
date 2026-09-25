@@ -341,7 +341,10 @@ async function loadPresets() {
       del.onclick = () => { if (del.dataset.armed) api('/api/preset', { ip: current, op: 'delete', id: p.id }).then(loadPresets).catch(e => toast(e.message)); else { del.dataset.armed = 1; del.textContent = 'Delete?'; del.classList.add('danger'); } };
       row.append(go, del); box.append(row);
     });
-  } catch (e) { box.innerHTML = `<span class="note">Presets unavailable: ${e.message}</span>`; }
+  } catch (e) {
+    const n = document.createElement('span'); n.className = 'note'; n.textContent = 'Presets unavailable: ' + e.message;
+    box.replaceChildren(n);
+  }
 }
 $('#presetSave').onclick = async () => {
   const name = $('#presetName').value.trim(); if (!name) return toast('Give the preset a name');
